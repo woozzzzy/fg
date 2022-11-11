@@ -343,7 +343,7 @@ impl<H, N, S, Id> Unpin for CommunicationIn<H, N, S, Id> {}
 /// Data necessary to participate in a round.
 pub struct RoundData<Id, Timer, Input, Output> {
 	/// Local voter id (if any.)
-	pub voter_id: Option<Id>,
+	pub voter_ids: Vec<Id>,
 	/// Timer before prevotes can be cast. This should be Start + 2T
 	/// where T is the gossip time estimate.
 	pub prevote_timer: Timer,

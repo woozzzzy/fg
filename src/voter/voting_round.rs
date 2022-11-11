@@ -64,7 +64,7 @@ where
 	N: Copy + BlockNumberOps + ::std::fmt::Debug,
 {
 	env: Arc<E>,
-	voting: Voting,
+	voting: Vec<Voting>,
 	votes: Round<E::Id, H, N, E::Signature>,
 	incoming: E::In,
 	outgoing: Buffered<E::Out, Message<H, N>>,
@@ -118,13 +118,15 @@ where
 
 		let votes = Round::new(round_params);
 
-		let voting = if round_data.voter_id.as_ref() == Some(votes.primary_voter().0) {
-			Voting::Primary
-		} else if round_data.voter_id.as_ref().map_or(false, |id| votes.voters().contains(id)) {
-			Voting::Yes
-		} else {
-			Voting::No
-		};
+		let voting = round_data.voter_ids.iter().map(|x|{
+			if x == votes.primary_voter().0 {
+				return Voting::Primary
+			} else if votes.voters().contains(x) {
+				return Voting::Yes
+			} else {
+				return Voting::No
+			};
+		}).collect::<Vec<_>>();
 
 		VotingRound {
 			votes,
@@ -151,9 +153,11 @@ where
 	) -> VotingRound<H, N, E> {
 		let round_data = env.round_data(votes.number());
 
+		let voting = (0..round_data.voter_ids.len()).map(|_| Voting::No).collect::<Vec<_>>();
+
 		VotingRound {
 			votes,
-			voting: Voting::No,
+			voting,
 			incoming: round_data.incoming,
 			outgoing: Buffered::new(round_data.outgoing),
 			state: None,
@@ -423,35 +427,35 @@ where
 			Some(State::Start(prevote_timer, precommit_timer)) => {
 				let maybe_estimate = last_round_state.estimate.clone();
 
-				match (maybe_estimate, self.voting.is_primary()) {
-					(Some(last_round_estimate), true) => {
-						let maybe_finalized = last_round_state.finalized.clone();
+				for x in &self.voting {
+					if x.is_primary() {
+						if let Some(ref last_round_estimate) = maybe_estimate {
+							let maybe_finalized = last_round_state.finalized.clone();
 
-						// Last round estimate has not been finalized.
-						let should_send_primary =
-							maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
-						if should_send_primary {
-							debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
-							let primary = PrimaryPropose {
-								target_hash: last_round_estimate.0,
-								target_number: last_round_estimate.1,
-							};
-							self.env.proposed(self.round_number(), primary.clone())?;
-							self.outgoing.push(Message::PrimaryPropose(primary));
-							self.state = Some(State::Proposed(prevote_timer, precommit_timer));
+							// Last round estimate has not been finalized.
+							let should_send_primary =
+								maybe_finalized.map_or(true, |f| last_round_estimate.1 > f.1);
+							if should_send_primary {
+								debug!(target: "afg", "Sending primary block hint for round {}", self.votes.number());
+								let primary = PrimaryPropose {
+									target_hash: last_round_estimate.0.clone(),
+									target_number: last_round_estimate.1.clone(),
+								};
+								self.env.proposed(self.round_number(), primary.clone())?;
+								self.outgoing.push(Message::PrimaryPropose(primary));
+								self.state = Some(State::Proposed(prevote_timer, precommit_timer));
 
-							return Ok(())
+								return Ok(())
+							} else {
+								debug!(target: "afg", "Last round estimate has been finalized, \
+									not sending primary block hint for round {}", self.votes.number());
+							}
 						} else {
-							debug!(target: "afg", "Last round estimate has been finalized, \
+							debug!(target: "afg", "Last round estimate does not exist, \
 								not sending primary block hint for round {}", self.votes.number());
-						}
-					},
-					(None, true) => {
-						debug!(target: "afg", "Last round estimate does not exist, \
-							not sending primary block hint for round {}", self.votes.number());
-					},
-					_ => {},
-				}
+						};
+					}
+				};
 
 				self.state = Some(State::Start(prevote_timer, precommit_timer));
 			},
@@ -482,7 +486,13 @@ where
 			};
 
 			if should_prevote {
-				if this.voting.is_active() {
+				let is_active = 0 < this.voting.len() && this.voting[0].is_active();
+				this.voting.iter().for_each(|x| {
+					if is_active != x.is_active() {
+						panic!("Disagreement within different keys on prevoting activity.")
+					}
+				});
+				if is_active {
 					debug!(target: "afg", "Constructing prevote for round {}", this.votes.number());
 
 					let (base, best_chain) = this.construct_prevote(last_round_state);
@@ -538,7 +548,7 @@ where
 
 				// when we can't construct a prevote, we shouldn't precommit.
 				this.state = None;
-				this.voting = Voting::No;
+				this.voting.iter_mut().for_each(|x| *x = Voting::No);
 			}
 
 			Ok(())
@@ -589,13 +599,15 @@ where
 				};
 
 				if should_precommit {
-					if self.voting.is_active() {
-						debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
-						let precommit = self.construct_precommit();
-						self.env.precommitted(self.round_number(), precommit.clone())?;
-						self.votes.set_precommitted_index();
-						self.outgoing.push(Message::Precommit(precommit));
-					}
+					for x in &self.voting {
+						if x.is_active() {
+							debug!(target: "afg", "Casting precommit for round {}", self.votes.number());
+							let precommit = self.construct_precommit();
+							self.env.precommitted(self.round_number(), precommit.clone())?;
+							self.votes.set_precommitted_index();
+							self.outgoing.push(Message::Precommit(precommit));
+						}
+					};
 					self.state = Some(State::Precommitted);
 				} else {
 					self.state = Some(State::Prevoted(precommit_timer));

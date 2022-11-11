@@ -170,7 +170,7 @@ pub mod environment {
 
 	pub struct Environment {
 		chain: Mutex<DummyChain>,
-		local_id: Id,
+		local_ids: Vec<Id>,
 		network: Network,
 		listeners: Mutex<
 			Vec<UnboundedSender<(&'static str, u32, Commit<&'static str, u32, Signature, Id>)>>,
@@ -182,7 +182,7 @@ pub mod environment {
 		pub fn new(network: Network, local_id: Id) -> Self {
 			Environment {
 				chain: Mutex::new(DummyChain::new()),
-				local_id,
+				vec![local_id],
 				network,
 				listeners: Mutex::new(Vec::new()),
 				last_completed_and_concluded: Mutex::new((0, 0)),
@@ -243,9 +243,9 @@ pub mod environment {
 		fn round_data(&self, round: u64) -> RoundData<Self::Id, Self::Timer, Self::In, Self::Out> {
 			const GOSSIP_DURATION: Duration = Duration::from_millis(500);
 
-			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_id);
+			let (incoming, outgoing) = self.network.make_round_comms(round, self.local_ids[0]);
 			RoundData {
-				voter_id: Some(self.local_id),
+				voter_id: self.local_ids,
 				prevote_timer: Box::new(Delay::new(GOSSIP_DURATION).map(Ok)),
 				precommit_timer: Box::new(Delay::new(GOSSIP_DURATION + GOSSIP_DURATION).map(Ok)),
 				incoming: Box::new(incoming),
